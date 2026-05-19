@@ -1,7 +1,5 @@
 import streamlit as st
-import spacy
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 import re
 
@@ -15,13 +13,11 @@ st.set_page_config(
 # ---------------------- 模块1：话语分割（EDU切分） ----------------------
 def simple_edu_segment(text):
     """基于规则的EDU切分（简化版）"""
-    # 简单的分句和子句切分规则
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     edus = []
     for sent in sentences:
         if not sent:
             continue
-        # 按连接词切分
         splitters = [', ', ' but ', ' although ', ' because ', ' since ', ' and ', ' or ']
         segments = [sent]
         for splitter in splitters:
@@ -37,7 +33,7 @@ def simple_edu_segment(text):
     return edus
 
 def get_neural_edu_sample():
-    """获取NeuralEDUSeg的示例数据（直接用GitHub公开文件）"""
+    """获取NeuralEDUSeg的示例数据"""
     url = "https://raw.githubusercontent.com/PKU-TANGENT/NeuralEDUSeg/master/data/rst/test/wsj_0600.out"
     try:
         response = requests.get(url, timeout=5)
@@ -49,10 +45,10 @@ def get_neural_edu_sample():
         return "The quick brown fox jumps over the lazy dog. Although it was tired, it kept running."
 
 def parse_neural_edu_text(text):
-    """解析NeuralEDUSeg格式文本，提取带边界的EDU"""
+    """解析NeuralEDUSeg格式文本"""
     lines = text.strip().split('\n')
     edus = []
-    for line in lines[:10]:  # 取前10行作为示例
+    for line in lines[:10]:
         if line.strip():
             edus.append(line.strip())
     return edus
@@ -72,7 +68,6 @@ def extract_explicit_relations(text):
     for category, words in CONNECTIVES.items():
         for word in words:
             if word in text_lower:
-                # 简单定位连接词位置
                 idx = text_lower.find(word)
                 relations.append({
                     "connective": word,
@@ -91,36 +86,37 @@ def split_arguments(text, connective):
     arg2 = text[idx + len(connective):].strip()
     return arg1, arg2
 
-# ---------------------- 模块3：指代消解可视化 ----------------------
+# ---------------------- 模块3：指代消解可视化（纯Python实现） ----------------------
 def simple_coref_resolution(text):
     """简化版指代消解，仅处理he/she/it/they"""
     pronouns = ["he", "she", "it", "they", "his", "her", "its", "their"]
-    # 简单假设：代词指代前文中最近的名词
-    nlp = spacy.load("en_core_web_sm")
-    doc = nlp(text)
+    # 提取文本中的实体（简单名词识别）
+    words = text.split()
     entities = []
+    for i, word in enumerate(words):
+        if word[0].isupper() and word.lower() not in ["the", "and", "of", "to", "in"]:
+            entities.append((word, i))
+    
     pronouns_found = []
-    for token in doc:
-        if token.pos_ == "PRON" and token.text.lower() in pronouns:
-            pronouns_found.append((token.text, token.idx, token.idx + len(token.text)))
-        elif token.ent_type_ in ["PERSON", "ORG", "GPE"]:
-            entities.append((token.text, token.idx, token.idx + len(token.text)))
+    for i, word in enumerate(words):
+        if word.lower() in pronouns:
+            pronouns_found.append((word, i))
     
     # 简单配对：代词指向最近的实体
     clusters = []
-    for pronoun, p_start, p_end in pronouns_found:
+    for pronoun, p_idx in pronouns_found:
         best_entity = None
         min_dist = float('inf')
-        for entity, e_start, e_end in entities:
-            if e_end < p_start:
-                dist = p_start - e_end
+        for entity, e_idx in entities:
+            if e_idx < p_idx:
+                dist = p_idx - e_idx
                 if dist < min_dist:
                     min_dist = dist
                     best_entity = entity
         if best_entity:
             clusters.append({
                 "entity": best_entity,
-                "mentions": [(best_entity, entities[0][1], entities[0][2]), (pronoun, p_start, p_end)]
+                "mentions": [(best_entity, entities[0][1]), (pronoun, p_idx)]
             })
     return clusters
 
@@ -139,7 +135,6 @@ with tab1:
     st.header("✂️ 话语分割（EDU切分）")
     st.markdown("对比规则基线与真实数据的EDU切分结果")
     
-    # 获取示例数据
     with st.spinner("加载示例数据..."):
         neural_text = get_neural_edu_sample()
         neural_edus = parse_neural_edu_text(neural_text)
@@ -192,8 +187,8 @@ with tab3:
             st.subheader("指代簇")
             for cluster in clusters:
                 st.markdown(f"**实体**: {cluster['entity']}")
-                for mention, start, end in cluster['mentions']:
-                    st.markdown(f"  - `{mention}` at position {start}-{end}")
+                for mention, idx in cluster['mentions']:
+                    st.markdown(f"  - `{mention}` at index {idx}")
             
             # 简单高亮显示（用HTML）
             st.subheader("高亮文本")
@@ -201,8 +196,10 @@ with tab3:
             colors = ["#FFB3BA", "#BAFFC9", "#BAE1FF"]
             for i, cluster in enumerate(clusters):
                 color = colors[i % len(colors)]
-                for mention, start, end in cluster['mentions']:
-                    highlighted_text = highlighted_text[:start] + f'<mark style="background-color: {color};">{mention}</mark>' + highlighted_text[end:]
+                entity, e_idx = cluster['mentions'][0]
+                pronoun, p_idx = cluster['mentions'][1]
+                highlighted_text = highlighted_text.replace(entity, f'<mark style="background-color: {color};">{entity}</mark>')
+                highlighted_text = highlighted_text.replace(pronoun, f'<mark style="background-color: {color};">{pronoun}</mark>')
             st.markdown(highlighted_text, unsafe_allow_html=True)
         else:
             st.info("未识别到指代关系")
